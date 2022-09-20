@@ -23,6 +23,7 @@
   rename
   usuba_AST
   hash_union
+  usuba_ES
   syntax
   usuba_print
   utils

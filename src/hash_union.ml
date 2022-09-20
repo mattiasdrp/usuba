@@ -5,12 +5,6 @@ type +'a hash_consed = {
     hkey : int;
 }
 
-type op = Mul | Add | Sub | Div | Mod
-
-type htreeInst = treeInst hash_consed and treeInst =
-    | Value of int 
-    | Operation of treeInst * op * treeInst
-
 let newtag =
     let r = ref 0 in
     fun () -> incr r;
@@ -129,7 +123,7 @@ end = struct
         in 
             search 0
 
-    and clear t =
+    let clear t =
         let empty_block = Weak.create 0 in
         for i = 0 to Array.length t.table - 1 do
             t.table.(i) <- empty_block
@@ -193,13 +187,13 @@ end
 
 module PUnion = struct 
     type t = {
-        mutable father : treeInst PArray.t;
+        mutable father : int PArray.t;
         rank : int PArray.t;
     }
 
     let create n = {
         rank = PArray.create n 0;
-        father = PArray.init n (fun i -> Value i);
+        father = PArray.init n (fun i -> i);
     }
     let rec find_aux f i = 
         let fi = PArray.get f i in

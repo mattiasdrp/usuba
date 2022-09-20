@@ -73,6 +73,7 @@ let optimize prog conf =
 
   runner#run_modules_bench
     [
+      (Usuba_ES.as_pass, true, Pass_runner.Always);
       (Simple_opts.as_pass, true, Pass_runner.Always);
       ( Inline.as_pass_pre,
         guard_pre_inline,
