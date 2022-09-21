@@ -160,6 +160,12 @@ val pp_def_or_inc : Format.formatter -> def_or_inc -> unit
 val pp_deq_i : Format.formatter -> deq_i -> unit
 val pp_deq : Format.formatter -> deq -> unit
 val pp_prog : Format.formatter -> prog -> unit
+val pp_arith_expr : Format.formatter -> arith_expr -> unit
+val pp_shift_op : Format.formatter -> shift_op -> unit
+val pp_arith_op : Format.formatter -> arith_op -> unit
+val pp_log_op : Format.formatter -> log_op -> unit
+val pp_var : Format.formatter -> var -> unit
+val pp_typ : Format.formatter -> typ -> unit
 val show_prog : prog -> string
 
 (** {1 S-expression} *)
@@ -218,6 +224,10 @@ val equal_var : var -> var -> bool
 
 val equal_var_d : var_d -> var_d -> bool
 (** [equal_var v1 v2] returns [true] if [v1] and [v2] are equal and [false] otherwise. See {!equal_prog} for details. *)
+
+val equal_log_op : log_op -> log_op -> bool
+val equal_arith_op : arith_op -> arith_op -> bool
+val equal_shift_op : shift_op -> shift_op -> bool
 
 (** {1 Custom comparators} *)
 
