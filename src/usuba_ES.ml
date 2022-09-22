@@ -1,5 +1,3 @@
-open Utils
-
 type ident = Ident.t
 
 type _expr =
@@ -27,6 +25,7 @@ module Hash_expr = struct
 
   let equal e1 e2 = equal__expr e1 e2
   let hash e = Hashtbl.hash e
+  let pp = pp__expr
 end
 
 module Hexpr = Hash_union.HashTable (Hash_expr)
@@ -40,22 +39,48 @@ module Uexpr = struct
     let compare h1 h2 = Int.compare h1.Hash_union.tag h2.Hash_union.tag
   end
 
-  module HSet = Set.Make (HCons)
+  module HSet = struct
+    include Set.Make (HCons)
+
+    let pp ?(pp_sep = fun ppf () -> Format.fprintf ppf "; ") ?(left = "{")
+        ?(right = "}") () ppf t =
+      Hash_union.Printers.(
+        pp_list ~pp_sep ~left ~right Hash_union.(pp_hash_consed Hash_expr.pp))
+        ppf (elements t)
+  end
 
   type t = { union : Hash_union.PUnion.t; exprs : HSet.t }
+
+  let pp ppf t =
+    Format.fprintf ppf "@[<v 1>{union: %a;@ exprs: %a}@]" Hash_union.PUnion.pp
+      t.union
+      HSet.(pp ())
+      t.exprs
 
   let create n = { union = Hash_union.PUnion.create n; exprs = HSet.empty }
   let find e u = Hash_union.PUnion.find e.union u.Hash_union.tag
 
-  let union h x y =
+  let union { union; exprs } x y =
+    let open Hash_union in
+    let tag_x = x.tag in
+    let tag_y = y.tag in
+    let mtag = max tag_x tag_y in
+    (* Union structure stores the tags *)
+    (* If we add a tag that is greater than the size of the union structure *)
+    (* all the previous equivalence classes are the same but the new one needs to be *)
+    (* added in a bigger union. Just resize it (copying the previous union in it) *)
+    (* and proceeds *)
+    let union =
+      if mtag > PUnion.length union then PUnion.expand union mtag else union
+    in
     {
-      exprs = HSet.add x (HSet.add y h.exprs);
-      union = Hash_union.PUnion.union h.union x.Hash_union.tag y.Hash_union.tag;
+      exprs = HSet.add x (HSet.add y exprs);
+      union = Hash_union.PUnion.union union tag_x tag_y;
     }
 end
 
 let equiv_class exp union =
-  let equi =
+  let _equi =
     Uexpr.HSet.filter
       (fun x ->
         Hash_union.PUnion.equiv union.Uexpr.union x.Hash_union.tag
@@ -146,7 +171,7 @@ let deq_es_to_ast (v : deq) : Usuba_AST.deq =
     orig = List.map (fun (i, d) -> (i, eqEs_to_eqAst d)) v.orig;
   }
 
-let fold_deqs (env_var : Usuba_AST.typ Ident.Hashtbl.t)
+let fold_deqs (_env_var : Usuba_AST.typ Ident.Hashtbl.t)
     (deqs : Usuba_AST.deq list) : deq list =
   List.map deq_ast_to_es deqs
 
@@ -218,7 +243,6 @@ let ftest deq =
 
 let%test_module "CSE" =
   (module struct
-    open Parser_api
     open Syntax
 
     let a = v "a"

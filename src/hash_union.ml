@@ -14,7 +14,28 @@ module type HashedType = sig
   val hash : t -> int
 end
 
-module HashTable (H : HashedType) : sig
+module type Printable = sig
+  type t
+
+  val pp : Format.formatter -> t -> unit
+end
+
+module Printers = struct
+  let pp_int ppf i = Format.fprintf ppf "%d" i
+
+  let pp_list ?(pp_sep = fun ppf () -> Format.fprintf ppf "; ") ?(left = "[")
+      ?(right = "]") pp ppf l =
+    Format.fprintf ppf "%s%a%s" left Format.(pp_print_list ~pp_sep pp) l right
+
+  let pp_array ?(pp_sep = fun ppf () -> Format.fprintf ppf "; ") ?(left = "[|")
+      ?(right = "|]") pp ppf a =
+    pp_list ~pp_sep ~left ~right pp ppf (Array.to_list a)
+end
+
+module HashTable (H : sig
+  include HashedType
+  include Printable with type t := t
+end) : sig
   type t = {
     mutable table : H.t hash_consed Weak.t array;
     mutable blocks_size : int;
@@ -23,12 +44,25 @@ module HashTable (H : HashedType) : sig
 
   val create : int -> t
   val hashcons : t -> H.t -> H.t hash_consed
+  val pp : Format.formatter -> t -> unit
 end = struct
   type t = {
     mutable table : H.t hash_consed Weak.t array;
     mutable blocks_size : int;
     mutable limit : int;
   }
+
+  let pp_weak ppf w =
+    for i = 0 to Weak.length w - 1 do
+      match Weak.get w i with
+      | None -> Format.fprintf ppf " "
+      | Some v -> Format.fprintf ppf "%a" (pp_hash_consed H.pp) v
+    done
+
+  let pp ppf { table; blocks_size; limit } =
+    Format.fprintf ppf "@[<v 1>{table: %a;@ blocks_size: %d;@ limit: %d}]"
+      Printers.(pp_array pp_weak)
+      table blocks_size limit
 
   let next_size n = min ((3 * n / 2) + 3) (Sys.max_array_length - 1)
 
@@ -107,7 +141,7 @@ end = struct
     in
     search 0
 
-  let clear t =
+  let _clear t =
     let empty_block = Weak.create 0 in
     for i = 0 to Array.length t.table - 1 do
       t.table.(i) <- empty_block
@@ -120,8 +154,18 @@ module PArray = struct
   type 'a t = 'a data ref
   and 'a data = Array of 'a array | Diff of int * 'a * 'a t
 
+  let rec pp ppv ppf t = Format.fprintf ppf "%a" (pp_data ppv) !t
+
+  and pp_data ppv ppf = function
+    | Array a -> Format.fprintf ppf "Array %a" (Printers.pp_array ppv) a
+    | Diff (i, v, t) ->
+        Format.fprintf ppf "Diff (%d, %a, %a)" i ppv v (pp ppv) t
+
   let create n v = ref (Array (Array.make n v))
   let init n f = ref (Array (Array.init n f))
+
+  let rec length t =
+    match !t with Array a -> Array.length a | Diff (_, _, t) -> length t
 
   let rec rerootk t k =
     match !t with
@@ -139,6 +183,40 @@ module PArray = struct
     | _ -> ()
 
   and reroot t = rerootk t (fun () -> ())
+
+  let ( = ) a1 a2 =
+    let a1, a2 =
+      match (!a1, !a2) with
+      | Array a1, Array a2 -> (a1, a2)
+      | _ ->
+          reroot a1;
+          let a1 =
+            match !a1 with Array a1 -> Array.copy a1 | _ -> assert false
+          in
+          reroot a2;
+          let a2 =
+            match !a2 with Array a2 -> Array.copy a2 | _ -> assert false
+          in
+          (a1, a2)
+    in
+    Stdlib.Array.for_all2 (fun a b -> a == b) a1 a2
+
+  let ( != ) a1 a2 =
+    let a1, a2 =
+      match (!a1, !a2) with
+      | Array a1, Array a2 -> (a1, a2)
+      | _ ->
+          reroot a1;
+          let a1 =
+            match !a1 with Array a1 -> Array.copy a1 | _ -> assert false
+          in
+          reroot a2;
+          let a2 =
+            match !a2 with Array a2 -> Array.copy a2 | _ -> assert false
+          in
+          (a1, a2)
+    in
+    Stdlib.Array.exists2 (fun a b -> a <> b) a1 a2
 
   let get t i =
     match !t with
@@ -159,13 +237,31 @@ module PArray = struct
           t := Diff (i, old, res);
           res)
     | _ -> assert false
+
+  let ( .%() ) t i = get t i
 end
 
 module PUnion = struct
   type t = { mutable father : int PArray.t; rank : int PArray.t }
 
+  let pp ppf t =
+    Format.fprintf ppf "{father: %a; rank: %a}"
+      PArray.(pp Printers.pp_int)
+      t.father
+      PArray.(pp Printers.pp_int)
+      t.rank
+
   let create n =
     { rank = PArray.create n 0; father = PArray.init n (fun i -> i) }
+
+  let length { father; _ } = PArray.length father
+
+  let expand t n =
+    let open PArray in
+    let length = length t.father in
+    let father = init n (fun i -> if i < length then t.father.%(i) else i) in
+    let rank = init n (fun i -> if i < length then t.rank.%(i) else i) in
+    { father; rank }
 
   let rec find_aux father i =
     let fi = PArray.get father i in
@@ -201,4 +297,9 @@ module PUnion = struct
           rank = PArray.set h.rank rep_x (rank_x + 1);
           father = PArray.set h.father rep_y rep_x;
         }
+
+  let ( = ) t1 t2 = PArray.(t1.father = t2.father) && PArray.(t1.rank = t2.rank)
+
+  let ( != ) t1 t2 =
+    PArray.(t1.father != t2.father) || PArray.(t1.rank != t2.rank)
 end
