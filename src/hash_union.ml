@@ -151,51 +151,111 @@ end = struct
 end
 
 module PArray = struct
-  type 'a t = 'a data ref
-  and 'a data = Array of 'a array | Diff of int * 'a * 'a t
+  type 'a t = {
+    data : 'a data ref;
+    default : 'a option;
+    default_f : (int -> 'a) option;
+  }
 
-  let rec pp ppv ppf t = Format.fprintf ppf "%a" (pp_data ppv) !t
+  and 'a data = Array of 'a array ref | Diff of int * 'a * 'a t
+
+  let rec pp ppv ppf t = Format.fprintf ppf "%a" (pp_data ppv) !(t.data)
 
   and pp_data ppv ppf = function
-    | Array a -> Format.fprintf ppf "Array %a" (Printers.pp_array ppv) a
+    | Array a -> Format.fprintf ppf "Array %a" (Printers.pp_array ppv) !a
     | Diff (i, v, t) ->
         Format.fprintf ppf "Diff (%d, %a, %a)" i ppv v (pp ppv) t
 
-  let create n v = ref (Array (Array.make n v))
-  let init n f = ref (Array (Array.init n f))
+  let create n v =
+    {
+      data = ref (Array (ref (Array.make n v)));
+      default = Some v;
+      default_f = None;
+    }
 
-  let rec length t =
-    match !t with Array a -> Array.length a | Diff (_, _, t) -> length t
+  let init n f =
+    {
+      data = ref (Array (ref (Array.init n f)));
+      default = None;
+      default_f = Some f;
+    }
 
-  let rec rerootk t k =
-    match !t with
-    | Diff (i, v, t') ->
-        (reroot t';
-         let n = !t' in
-         match n with
-         | Array a ->
-             let v' = a.(i) in
-             a.(i) <- v;
-             t := n;
-             t' := Diff (i, v', t)
-         | _ -> assert false);
-        k ()
-    | _ -> ()
+  let rec reroot ({ data; _ } as t) =
+    match !data with
+    | Diff (i, v, t') -> (
+        reroot t';
+        let diff_data = !(t'.data) in
+        match diff_data with
+        | Array ref_a ->
+            let v' = !ref_a.(i) in
+            !ref_a.(i) <- v;
+            data := diff_data;
+            t'.data := Diff (i, v', t)
+        | _ -> assert false)
+    | Array _ -> ()
 
-  and reroot t = rerootk t (fun () -> ())
+  let get t i =
+    reroot t;
+    match !(t.data) with
+    | Array ref_a ->
+        if i < 0 || i >= Array.length !ref_a then
+          invalid_arg (Printf.sprintf "get %d" i);
+        !ref_a.(i)
+    | _ -> assert false
+
+  let expand t prev_length new_length =
+    match (t.default, t.default_f, !(t.data)) with
+    | Some v, None, Array ref_a ->
+        let a = Array.make new_length v in
+        Array.blit !ref_a 0 a 0 prev_length;
+        a
+    | None, Some f, Array ref_a ->
+        let a = Array.init new_length f in
+        Array.blit !ref_a 0 a 0 prev_length;
+        a
+    | _ -> assert false
+
+  let set t i v =
+    if i < 0 then invalid_arg (Printf.sprintf "set %d" i);
+    reroot t;
+    match !(t.data) with
+    | Array ref_a as data -> (
+        let alength = Array.length !ref_a in
+        let a, old =
+          if i >= alength then (
+            let a = expand t alength (max (alength * 2) i) in
+            Array.unsafe_set a i v;
+            (a, None))
+          else
+            let old = Array.unsafe_get !ref_a i in
+            (!ref_a, if old == v then None else Some old)
+        in
+        ref_a := a;
+        match old with
+        | None -> t
+        | Some old ->
+            a.(i) <- v;
+            let res = { t with data = ref data } in
+            t.data := Diff (i, old, res);
+            res)
+    | _ -> assert false
 
   let ( = ) a1 a2 =
     let a1, a2 =
-      match (!a1, !a2) with
-      | Array a1, Array a2 -> (a1, a2)
+      match (!(a1.data), !(a2.data)) with
+      | Array a1, Array a2 -> (!a1, !a2)
       | _ ->
           reroot a1;
           let a1 =
-            match !a1 with Array a1 -> Array.copy a1 | _ -> assert false
+            match !(a1.data) with
+            | Array a1 -> Array.copy !a1
+            | _ -> assert false
           in
           reroot a2;
           let a2 =
-            match !a2 with Array a2 -> Array.copy a2 | _ -> assert false
+            match !(a2.data) with
+            | Array a2 -> Array.copy !a2
+            | _ -> assert false
           in
           (a1, a2)
     in
@@ -203,42 +263,24 @@ module PArray = struct
 
   let ( != ) a1 a2 =
     let a1, a2 =
-      match (!a1, !a2) with
-      | Array a1, Array a2 -> (a1, a2)
+      match (!(a1.data), !(a2.data)) with
+      | Array a1, Array a2 -> (!a1, !a2)
       | _ ->
           reroot a1;
           let a1 =
-            match !a1 with Array a1 -> Array.copy a1 | _ -> assert false
+            match !(a1.data) with
+            | Array a1 -> Array.copy !a1
+            | _ -> assert false
           in
           reroot a2;
           let a2 =
-            match !a2 with Array a2 -> Array.copy a2 | _ -> assert false
+            match !(a2.data) with
+            | Array a2 -> Array.copy !a2
+            | _ -> assert false
           in
           (a1, a2)
     in
     Stdlib.Array.exists2 (fun a b -> a <> b) a1 a2
-
-  let get t i =
-    match !t with
-    | Array a -> a.(i)
-    | _ -> (
-        reroot t;
-        match !t with Array a -> a.(i) | _ -> assert false)
-
-  let set t i v =
-    reroot t;
-    match !t with
-    | Array a as n ->
-        let old = a.(i) in
-        if old == v then t
-        else (
-          a.(i) <- v;
-          let res = ref n in
-          t := Diff (i, old, res);
-          res)
-    | _ -> assert false
-
-  let ( .%() ) t i = get t i
 end
 
 module PUnion = struct
@@ -253,15 +295,6 @@ module PUnion = struct
 
   let create n =
     { rank = PArray.create n 0; father = PArray.init n (fun i -> i) }
-
-  let length { father; _ } = PArray.length father
-
-  let expand t n =
-    let open PArray in
-    let length = length t.father in
-    let father = init n (fun i -> if i < length then t.father.%(i) else i) in
-    let rank = init n (fun i -> if i < length then t.rank.%(i) else i) in
-    { father; rank }
 
   let rec find_aux father i =
     let fi = PArray.get father i in

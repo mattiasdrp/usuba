@@ -62,20 +62,14 @@ module Uexpr = struct
 
   let union { union; exprs } x y =
     let open Hash_union in
-    let tag_x = x.tag in
-    let tag_y = y.tag in
-    let mtag = max tag_x tag_y in
     (* Union structure stores the tags *)
     (* If we add a tag that is greater than the size of the union structure *)
     (* all the previous equivalence classes are the same but the new one needs to be *)
     (* added in a bigger union. Just resize it (copying the previous union in it) *)
     (* and proceeds *)
-    let union =
-      if mtag > PUnion.length union then PUnion.expand union mtag else union
-    in
     {
       exprs = HSet.add x (HSet.add y exprs);
-      union = Hash_union.PUnion.union union tag_x tag_y;
+      union = Hash_union.PUnion.union union x.tag y.tag;
     }
 end
 
